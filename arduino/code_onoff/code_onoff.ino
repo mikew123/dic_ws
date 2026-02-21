@@ -12,6 +12,7 @@ const int MOTOR_PIN = 39;
 WebServer server(80);
 
 void setup() {
+  
   Serial.begin(115200);
   delay(1000);
   
@@ -156,6 +157,7 @@ void handleRoot() {
 // Handle motor ON command
 void handleMotorOn() {
   digitalWrite(MOTOR_PIN, HIGH);
+  analogWrite(LED_BUILTIN, 255);
   Serial.println("Motor ON");
   server.send(200, "text/plain", "ON");
 }
@@ -163,6 +165,7 @@ void handleMotorOn() {
 // Handle motor OFF command
 void handleMotorOff() {
   digitalWrite(MOTOR_PIN, LOW);
+  analogWrite(LED_BUILTIN, 50);
   Serial.println("Motor OFF");
   server.send(200, "text/plain", "OFF");
 }
