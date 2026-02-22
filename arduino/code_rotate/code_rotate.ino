@@ -90,6 +90,13 @@ void loop() {
   server.handleClient();
   updateSwitchStates();
   updateMotorControl();
+
+  // MRW: LED ON when motor is on
+  if(digitalRead(MOTOR_PIN)) 
+    analogWrite(LED_BUILTIN, 255);
+  else 
+    analogWrite(LED_BUILTIN, 50);
+
 }
 
 // Update limit switch states with debouncing
@@ -115,7 +122,8 @@ void updateSwitchStates() {
     homeSwitchDetected = homeRaw;
   }
   
-  // Read POSITION switch, OR in HOME switch to complete 4 quadrant positions
+  // Read POSITION switch
+  // MRW: OR in HOME switch to complete 4 quadrant positions
   bool positionRaw = digitalRead(POSITION_SWITCH_PIN) | homeRaw;
   if (positionRaw != positionSwitchLastState) {
     homeDetectTime = now;
@@ -145,7 +153,8 @@ void onHomeSwitchTriggered(unsigned long now) {
     if (homeCountDuringHome == 2) {
       // Start home offset rotation
       lastHomeOffsetCompleteTime = now;
-      positionCountDuringRotation = 0;
+      // MRW: HOME also causes ROTATION trigger so start at -1 to get 0
+      positionCountDuringRotation = -1; 
       Serial.print("Starting home offset rotation: ");
       Serial.println(homeOffset);
     }
