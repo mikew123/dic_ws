@@ -12,10 +12,17 @@ const int MOTOR_PIN = 39;
 WebServer server(80);
 
 void setup() {
-  
+  // LED is ON while waiting for serial connection
+  analogWrite(LED_BUILTIN, 255);
   Serial.begin(115200);
-  delay(1000);
-  
+  uint32_t t0 = millis();
+  while(!Serial) {
+    //Wait for 10 seconds for USB serial connection
+    if((millis()-t0) > 10000) break;
+    delay(100);
+  }
+  analogWrite(LED_BUILTIN, 10);
+
   // Initialize motor pin
   pinMode(MOTOR_PIN, OUTPUT);
   digitalWrite(MOTOR_PIN, LOW);
@@ -165,7 +172,7 @@ void handleMotorOn() {
 // Handle motor OFF command
 void handleMotorOff() {
   digitalWrite(MOTOR_PIN, LOW);
-  analogWrite(LED_BUILTIN, 50);
+  analogWrite(LED_BUILTIN, 10);
   Serial.println("Motor OFF");
   server.send(200, "text/plain", "OFF");
 }
