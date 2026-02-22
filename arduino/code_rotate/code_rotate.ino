@@ -13,6 +13,7 @@ const int POSITION_SWITCH_PIN = 18;
 // Motor control states
 enum MotorState {
   MOTOR_OFF,
+  MOTOR_ON,
   HOMING,
   HOME_COMPLETE,
   PERIODIC_RUNNING,
@@ -76,6 +77,8 @@ void setup() {
   // Setup web server routes
   server.on("/", handleRoot);
   server.on("/config", handleConfig);
+  server.on("/on", handleMotorOn);
+  server.on("/off", handleMotorOff);
   server.on("/home", handleHome);
   server.on("/run", handleRun);
   server.on("/stop", handleStop);
@@ -162,13 +165,15 @@ void onHomeSwitchTriggered(unsigned long now) {
 }
 
 // Handle POSITION switch trigger
+const unsigned long  TIMEDELTA_MAX = 20000; // 20 sec
 void onPositionSwitchTriggered(unsigned long now) {
   // Estimate RPM from time between position switches (90 degrees apart)
   static unsigned long lastPosTime = 0;
   if (lastPosTime > 0) {
     unsigned long timeDelta = now - lastPosTime;
     // RPM = (90 degrees / timeDelta in ms) * 60000 ms/min / 360 degrees per rotation
-    if (timeDelta > 0) {
+    // MRW: Igbore large time between position switches
+    if ((timeDelta > 0) && (timeDelta < TIMEDELTA_MAX)){
       estimatedRPM = (90.0 / (float)timeDelta) * 60.0;
       Serial.print("Estimated RPM: ");
       Serial.println(estimatedRPM);
@@ -378,6 +383,26 @@ void handleRoot() {
       transition: all 0.3s ease;
       color: white;
     }
+    .on-btn {
+      background-color: #4CAF50;
+    }
+    .on-btn:hover {
+      background-color: #45a049;
+      transform: scale(1.02);
+    }
+    .on-btn:active {
+      transform: scale(0.98);
+    }
+    .off-btn {
+      background-color: #f44336;
+    }
+    .off-btn:hover {
+      background-color: #da190b;
+      transform: scale(1.02);
+    }
+    .off-btn:active {
+      transform: scale(0.98);
+    }
     .home-btn {
       background-color: #2196F3;
     }
@@ -459,6 +484,8 @@ void handleRoot() {
     
     <h2>Commands</h2>
     <div class="button-group">
+      <button class="on-btn" onclick="sendCommand('on')">ON</button>
+      <button class="off-btn" onclick="sendCommand('off')">OFF</button>
       <button class="home-btn" onclick="sendCommand('home')">HOME</button>
       <button class="run-btn" onclick="sendCommand('run')">RUN</button>
       <button class="stop-btn" onclick="sendCommand('stop')">STOP</button>
@@ -553,6 +580,22 @@ void handleConfig() {
   }
   
   server.send(200, "text/plain", "Configuration updated");
+}
+
+// Handle motor ON command
+void handleMotorOn() {
+  digitalWrite(MOTOR_PIN, HIGH);
+  motorState = MOTOR_ON;
+  Serial.println("Motor ON");
+  server.send(200, "text/plain", "ON");
+}
+
+// Handle motor OFF command
+void handleMotorOff() {
+  digitalWrite(MOTOR_PIN, LOW);
+  motorState = MOTOR_OFF;
+  Serial.println("Motor OFF");
+  server.send(200, "text/plain", "OFF");
 }
 
 // Handle HOME command
