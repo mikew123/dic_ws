@@ -43,6 +43,10 @@ int lastRotationNumber = -1;           // Track which rotation we're on
 
 // Debounce constants
 const int DEBOUNCE_TIME = 100;         // 100ms debounce requirement
+// Maximum time between 90 degree positions while rotating at lowest speed
+const unsigned long  TIMEDELTA_MAX = 50000; // 50 sec
+// Wait time for Serial port connection before continuing without
+const int SERIALWAIT = 10000; // 10 sec
 
 // Create web server on port 80
 WebServer server(80);
@@ -53,8 +57,8 @@ void setup() {
   Serial.begin(115200);
   uint32_t t0 = millis();
   while(!Serial) {
-    // Wait for 10 seconds for USB serial connection
-    if((millis()-t0) > 10000) break;
+    // Wait for USB serial connection before continuing without
+    if((millis()-t0) > SERIALWAIT) break;
     delay(100);
   }
   analogWrite(LED_BUILTIN, 10);
@@ -165,7 +169,6 @@ void onHomeSwitchTriggered(unsigned long now) {
 }
 
 // Handle POSITION switch trigger
-const unsigned long  TIMEDELTA_MAX = 20000; // 20 sec
 void onPositionSwitchTriggered(unsigned long now) {
   // Estimate RPM from time between position switches (90 degrees apart)
   static unsigned long lastPosTime = 0;
