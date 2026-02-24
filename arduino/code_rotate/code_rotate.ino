@@ -175,9 +175,13 @@ void onPositionSwitchTriggered(unsigned long now) {
   if (lastPosTime > 0) {
     unsigned long timeDelta = now - lastPosTime;
     // RPM = (90 degrees / timeDelta in ms) * 60000 ms/min / 360 degrees per rotation
-    // MRW: Igbore large time between position switches
+    // MRW: Ignore large time between position switches
     if ((timeDelta > 0) && (timeDelta < TIMEDELTA_MAX)){
-      estimatedRPM = (90.0 / (float)timeDelta) * 60.0;
+      // estimatedRPM = (90.0 / (float)timeDelta) * 60.0;
+      // MRW: Accurate RPM calc since timeDelta is in msec using millis()
+      estimatedRPM = (90.0/360.0) * ((60.0*1000)/float(timeDelta));
+      Serial.print("timeDelta:");
+      Serial.println(timeDelta);
       Serial.print("Estimated RPM: ");
       Serial.println(estimatedRPM);
     }
@@ -219,8 +223,9 @@ void onPositionSwitchTriggered(unsigned long now) {
     Serial.println(positionCountDuringRotation);
     
     // Check if we've reached the target rotation
-    int targetPositionSwitches = periodicRotation / 90;
-    if (positionCountDuringRotation >= targetPositionSwitches) {
+    int targetPositionSwitches = (periodicRotation+homeOffset) / 90;
+    int remainingDegrees = (periodicRotation+homeOffset) % 90;
+    if (positionCountDuringRotation >= targetPositionSwitches && remainingDegrees == 0) {
       // Stop motor for next scheduled rotation
       digitalWrite(MOTOR_PIN, LOW);
       motorState = PERIODIC_WAITING;
@@ -243,8 +248,10 @@ void updateMotorControl() {
     if (remainingDegrees > 0 && positionCountDuringRotation == fullRotationSwitches) {
       // Rotating the remaining degrees using time
       unsigned long timeSinceLastSwitch = now - lastPositionSwitchTime;
-      float rotationTimeForRemainder = (remainingDegrees / 90.0) * (60000.0 / estimatedRPM);
-      
+      // float rotationTimeForRemainder = (remainingDegrees / 90.0) * (60000.0 / estimatedRPM);
+      //MRW: New calc for correct RPM
+      float rotationTimeForRemainder = (remainingDegrees / 360.0) * (60000.0 / estimatedRPM);
+   
       Serial.print("Remaining degrees: ");
       Serial.print(remainingDegrees);
       Serial.print(", time needed: ");
@@ -260,14 +267,21 @@ void updateMotorControl() {
     }
   } else if (motorState == PERIODIC_RUNNING) {
     // Check if we need to handle remaining degrees for this rotation
-    int fullRotationSwitches = periodicRotation / 90;
-    int remainingDegrees = periodicRotation % 90;
+    int fullRotationSwitches = (periodicRotation+homeOffset) / 90;
+    int remainingDegrees = (periodicRotation+homeOffset) % 90;
     
     if (remainingDegrees > 0 && positionCountDuringRotation == fullRotationSwitches) {
       // Rotating the remaining degrees using time
       unsigned long timeSinceLastSwitch = now - lastPositionSwitchTime;
-      float rotationTimeForRemainder = (remainingDegrees / 90.0) * (60000.0 / estimatedRPM);
+      // float rotationTimeForRemainder = (remainingDegrees / 90.0) * (60000.0 / estimatedRPM);
+      //MRW: New calc for correct RPM
+      float rotationTimeForRemainder = (remainingDegrees / 360.0) * (60000.0 / estimatedRPM);
       
+      Serial.print("Remaining degrees: ");
+      Serial.println(remainingDegrees);
+      Serial.print(", time needed: ");
+      Serial.println((unsigned long)rotationTimeForRemainder);
+
       if (timeSinceLastSwitch >= (unsigned long)rotationTimeForRemainder) {
         digitalWrite(MOTOR_PIN, LOW);
         motorState = PERIODIC_WAITING;
@@ -487,11 +501,12 @@ void handleRoot() {
     
     <h2>Commands</h2>
     <div class="button-group">
-      <button class="on-btn" onclick="sendCommand('on')">ON</button>
-      <button class="off-btn" onclick="sendCommand('off')">OFF</button>
       <button class="home-btn" onclick="sendCommand('home')">HOME</button>
       <button class="run-btn" onclick="sendCommand('run')">RUN</button>
       <button class="stop-btn" onclick="sendCommand('stop')">STOP</button>
+      <h3>Motor testing</h3>
+      <button class="on-btn" onclick="sendCommand('on')">ON</button>
+      <button class="off-btn" onclick="sendCommand('off')">OFF</button>
     </div>
     
     <div class="status">
@@ -583,22 +598,6 @@ void handleConfig() {
   }
   
   server.send(200, "text/plain", "Configuration updated");
-}
-
-// Handle motor ON command
-void handleMotorOn() {
-  digitalWrite(MOTOR_PIN, HIGH);
-  motorState = MOTOR_ON;
-  Serial.println("Motor ON");
-  server.send(200, "text/plain", "ON");
-}
-
-// Handle motor OFF command
-void handleMotorOff() {
-  digitalWrite(MOTOR_PIN, LOW);
-  motorState = MOTOR_OFF;
-  Serial.println("Motor OFF");
-  server.send(200, "text/plain", "OFF");
 }
 
 // Handle HOME command
@@ -700,6 +699,22 @@ void handleStop() {
   Serial.println("STOP command issued");
   
   server.send(200, "text/plain", "Motor stopped");
+}
+
+// Handle motor ON command
+void handleMotorOn() {
+  digitalWrite(MOTOR_PIN, HIGH);
+  motorState = MOTOR_ON;
+  Serial.println("Motor ON");
+  server.send(200, "text/plain", "ON");
+}
+
+// Handle motor OFF command
+void handleMotorOff() {
+  digitalWrite(MOTOR_PIN, LOW);
+  motorState = MOTOR_OFF;
+  Serial.println("Motor OFF");
+  server.send(200, "text/plain", "OFF");
 }
 
 // Handle status request
