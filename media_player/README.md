@@ -1,0 +1,3 @@
+# Dicotomy of Passion Media player
+There are 2 projectors in the house pointing out different side of the house in the rotating sculpture which are playing different videos on a timed loop. The will be audio from each video eminating from the side of the house the video is playing from. There is AC power in the sculpure to run the media.<br>
+The player could be a MAC/PC or a Raspberry Pi with 2 HDMI interfaces. The audio would come from the 3.5mm audio jack on each of the 2 projectors. The sound can come from 2 portable speakers using the audio signal from the 3.5mm audio jacks. The portable speakers can have charging cables plugged in supplying power instead of only the internal batteries.<br>
