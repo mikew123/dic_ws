@@ -45,38 +45,27 @@ enum MotorState {
 };
 
 // Configuration parameters
-int homeOffset = 0;                    // 0-360 degrees
 float periodicPeriod = 60.0;           // 60-1000 seconds with 1 decimal
-int periodicRotation = 90;             // [90, 180, 270, 360, 450, 540, 630, 720] degrees
+int periodicRotation = 180;             // [90, 180, 270, 360] degrees
 
 // Global state
 MotorState motorState = MOTOR_OFF;
-unsigned long lastHomeSwitchTime = 0;
-unsigned long lastPositionSwitchTime = 0;
-unsigned long homeDetectTime = 0;      // Time when home switch was first detected
-unsigned long lastHomeOffsetCompleteTime = 0;
-float estimatedRPM = 10.0;             // Default RPM estimate
 int homeCountDuringHome = 0;           // Count of HOME switch triggers during homing
 int positionCountDuringRotation = 0;   // Count of POSITION switch triggers during rotation
 bool homeSwitchDetected = false;
 bool positionSwitchDetected = false;
 bool homeSwitchLastState = LOW;
 bool positionSwitchLastState = LOW;
-unsigned long runCommandTime = 0;      // Time when RUN command was issued
 int lastRotationNumber = -1;           // Track which rotation we're on
 
 // Debounce constants
-const int DEBOUNCE_TIME = 100;         // 100ms debounce requirement
-// Maximum time between 90 degree positions while rotating at lowest speed
-const unsigned long  TIMEDELTA_MAX = 50000; // 50 sec
+const int DEBOUNCE_TIME = 10;         // 10ms debounce requirement
 // Wait time for Serial port connection before continuing without
 const int SERIALWAIT = 10000; // 10 sec
 
 
 void setup() {
-  // LED is ON while waiting for serial connection
-  // analogWrite(LED_BUILTIN, 255);
-
+  // LED blinks while waiting for serial connection
   led.ledBlink(1000, 255, 250, 0, 250);
 
   Serial.begin(115200);
@@ -86,7 +75,6 @@ void setup() {
     if((millis()-t0) > SERIALWAIT) break;
     delay(100);
   }
-  // analogWrite(LED_BUILTIN, 10);
   led.stopBlink(50);
 
   // Initialize pins
@@ -127,17 +115,25 @@ void loop() {
   
   // MRW: LED ON when motor is on
   if(digitalRead(MOTOR_PIN)) 
-    // analogWrite(LED_BUILTIN, 255);
     led.setIntensity(255);
   else 
-    // analogWrite(LED_BUILTIN, 50);
     led.setIntensity(50);
 
 }
 
 
-
+////////////////////////////////////////////////////////////////////////
 // OSC STUFF
+
+//Decoded OSC messages
+bool calibrateHome = false;
+bool motorOn = false;
+bool motorOff = false;
+bool rotateTo0 = false;
+bool rotateTo90 = false;
+bool rotateTo180 = false;
+bool rotateTo270 = false;
+bool rotateNow = false;
 
 class OSCDecoder {
 public:
@@ -241,6 +237,7 @@ public:
     }
 };
 
+
 void printOSCMessage(OSCDecoder::OSCMessage* msg);
 void decodeOSCMessage(OSCDecoder::OSCMessage* msg);
 void doOSC(void);
@@ -284,14 +281,6 @@ void printOSCMessage(OSCDecoder::OSCMessage* msg) {
     Serial.println();
 }
 
-//Decoded OSC messages
-bool calibrateHome = false;
-bool motorOn = false;
-bool motorOff = false;
-bool rotateTo0 = false;
-bool rotateTo90 = false;
-bool rotateTo180 = false;
-bool rotateTo270 = false;
 
 // Control motor using info in the OSC message
 void decodeOSCMessage(OSCDecoder::OSCMessage* msg) {
@@ -341,12 +330,14 @@ void decodeOSCMessage(OSCDecoder::OSCMessage* msg) {
     rotateTo90 = false;
     rotateTo180 = false;
     rotateTo270 = false;
+    rotateNow = false;
     if(cnt == 3) {
         if(oscField[1] == "rotate") {
           rotateTo0 = oscField[2] == "0";
           rotateTo90 = oscField[2] == "90";
           rotateTo180 = oscField[2] == "180";
           rotateTo270 = oscField[2] == "270";
+          rotateNow = oscField[2] == "now";
         }
     }
 }
@@ -360,6 +351,11 @@ void doOSC(void) {
     if (rotateTo90) Serial.println("Rotate to the 90 position");
     if (rotateTo180) Serial.println("Rotate to the 180 position");
     if (rotateTo270) Serial.println("Rotate to the 270 position");
+
+    if (rotateNow) {
+      // start new rotation using periodic rotation degrees on web page
+
+    }
 }
 
 // Handle OSC messages
@@ -416,9 +412,15 @@ void handleOSC(void) {
     }
 }
 
+////////////////////////////////////////////////////////////////////////
+// Platform switch stuff
+unsigned long homeDetectTime = 0;
+unsigned long lastHomeSwitchTime = 0;
+unsigned long lastPositionSwitchTime = 0;
 
 // Update limit switch states with debouncing
 void updateSwitchStates() {
+  // Time used for switch debounce
   unsigned long now = millis();
   
   // Read HOME switch
@@ -468,75 +470,24 @@ void onHomeSwitchTriggered(unsigned long now) {
     Serial.print("Home switch count during homing: ");
     Serial.println(homeCountDuringHome);
     
-    if (homeCountDuringHome == 2) {
-      // Start home offset rotation
-      lastHomeOffsetCompleteTime = now;
-      // MRW: HOME also causes ROTATION trigger so start at -1 to get 0
+    if (homeCountDuringHome == 1) {
       positionCountDuringRotation = -1; 
-      Serial.print("Starting home offset rotation: ");
-      Serial.println(homeOffset);
     }
   }
 }
 
-// Handle POSITION switch trigger
+// Handle POSITION switch trigger for 90,180,270,360 rotations
 void onPositionSwitchTriggered(unsigned long now) {
-  // Estimate RPM from time between position switches (90 degrees apart)
-  static unsigned long lastPosTime = 0;
-  if (lastPosTime > 0) {
-    unsigned long timeDelta = now - lastPosTime;
-    // RPM = (90 degrees / timeDelta in ms) * 60000 ms/min / 360 degrees per rotation
-    // MRW: Ignore large time between position switches
-    if ((timeDelta > 0) && (timeDelta < TIMEDELTA_MAX)){
-      // estimatedRPM = (90.0 / (float)timeDelta) * 60.0;
-      // MRW: Accurate RPM calc since timeDelta is in msec using millis()
-      estimatedRPM = (90.0/360.0) * ((60.0*1000)/float(timeDelta));
-      Serial.print("timeDelta:");
-      Serial.println(timeDelta);
-      Serial.print("Estimated RPM: ");
-      Serial.println(estimatedRPM);
-    }
-  }
-  lastPosTime = now;
   
-  if (motorState == HOMING && homeCountDuringHome >= 2) {
-    // During home offset rotation, count position switches
-    positionCountDuringRotation++;
-    Serial.print("Position switch during home offset: ");
-    Serial.println(positionCountDuringRotation);
-    
-    // Each position switch represents 90 degrees
-    int degreesFromLastHome = 90 * positionCountDuringRotation;
-    
-    if (degreesFromLastHome >= homeOffset) {
-      // Need to calculate if we should stop or continue
-      int fullSwitches = homeOffset / 90;
-      int remainingDegrees = homeOffset % 90;
-      
-      if (positionCountDuringRotation > fullSwitches) {
-        // We've gone too far, stop motor
-        digitalWrite(MOTOR_PIN, LOW);
-        motorState = HOME_COMPLETE;
-        Serial.println("Homing complete (after offset)");
-      } else if (positionCountDuringRotation == fullSwitches && remainingDegrees == 0) {
-        // Exact stop at switch
-        digitalWrite(MOTOR_PIN, LOW);
-        motorState = HOME_COMPLETE;
-        positionCountDuringRotation = 0;
-        homeCountDuringHome = 0;
-        Serial.println("Homing complete (exact offset)");
-      }
-    }
-  } else if (motorState == PERIODIC_RUNNING) {
+  if (motorState == PERIODIC_RUNNING) {
     // Count position switches during periodic rotation
     positionCountDuringRotation++;
     Serial.print("Position switch count during rotation: ");
     Serial.println(positionCountDuringRotation);
     
     // Check if we've reached the target rotation
-    int targetPositionSwitches = (periodicRotation+homeOffset) / 90;
-    int remainingDegrees = (periodicRotation+homeOffset) % 90;
-    if (positionCountDuringRotation >= targetPositionSwitches && remainingDegrees == 0) {
+    int targetPositionSwitches = periodicRotation / 90;
+    if (positionCountDuringRotation >= targetPositionSwitches) {
       // Stop motor for next scheduled rotation
       digitalWrite(MOTOR_PIN, LOW);
       motorState = PERIODIC_WAITING;
@@ -547,57 +498,28 @@ void onPositionSwitchTriggered(unsigned long now) {
   }
 }
 
+////////////////////////////////////////////////////////////////////////
+// Motor control stuff
+unsigned long runCommandTime = 0;
+
 // Update motor control logic
 void updateMotorControl() {
   unsigned long now = millis();
-  
-  if (motorState == HOMING && homeCountDuringHome >= 2) {
-    // Handle home offset rotation
-    int fullRotationSwitches = homeOffset / 90;
-    int remainingDegrees = homeOffset % 90;
-    
-    if (remainingDegrees > 0 && positionCountDuringRotation == fullRotationSwitches) {
-      // Rotating the remaining degrees using time
-      unsigned long timeSinceLastSwitch = now - lastPositionSwitchTime;
-      // float rotationTimeForRemainder = (remainingDegrees / 90.0) * (60000.0 / estimatedRPM);
-      //MRW: New calc for correct RPM
-      float rotationTimeForRemainder = (remainingDegrees / 360.0) * (60000.0 / estimatedRPM);
-   
-      Serial.print("Remaining degrees: ");
-      Serial.print(remainingDegrees);
-      Serial.print(", time needed: ");
-      Serial.println((unsigned long)rotationTimeForRemainder);
-      
-      if (timeSinceLastSwitch >= (unsigned long)rotationTimeForRemainder) {
-        digitalWrite(MOTOR_PIN, LOW);
-        motorState = HOME_COMPLETE;
-        positionCountDuringRotation = 0;
-        homeCountDuringHome = 0;
-        Serial.println("Homing complete (time-based offset)");
-      }
-    }
-  } else if (motorState == PERIODIC_RUNNING) {
-    // Check if we need to handle remaining degrees for this rotation
-    int fullRotationSwitches = (periodicRotation+homeOffset) / 90;
-    int remainingDegrees = (periodicRotation+homeOffset) % 90;
-    
-    if (remainingDegrees > 0 && positionCountDuringRotation == fullRotationSwitches) {
-      // Rotating the remaining degrees using time
-      unsigned long timeSinceLastSwitch = now - lastPositionSwitchTime;
-      // float rotationTimeForRemainder = (remainingDegrees / 90.0) * (60000.0 / estimatedRPM);
-      //MRW: New calc for correct RPM
-      float rotationTimeForRemainder = (remainingDegrees / 360.0) * (60000.0 / estimatedRPM);
-      
-      Serial.print("Remaining degrees: ");
-      Serial.println(remainingDegrees);
-      Serial.print(", time needed: ");
-      Serial.println((unsigned long)rotationTimeForRemainder);
 
-      if (timeSinceLastSwitch >= (unsigned long)rotationTimeForRemainder) {
+  if (motorState == HOMING) {
+    if(homeCountDuringHome >= 1) {
+        digitalWrite(MOTOR_PIN, LOW);
+        motorState = PERIODIC_WAITING;
+        Serial.println("Homing complete, ready for periodic rotation");
+    }
+   
+  } else if (motorState == PERIODIC_RUNNING) {
+    int fullRotationSwitches = periodicRotation / 90;
+    
+    if (positionCountDuringRotation == fullRotationSwitches) {
         digitalWrite(MOTOR_PIN, LOW);
         motorState = PERIODIC_WAITING;
         Serial.println("Rotation complete, waiting for next period");
-      }
     }
   } else if (motorState == PERIODIC_WAITING) {
     // Calculate which rotation we should be on now
@@ -611,7 +533,7 @@ void updateMotorControl() {
     if (currentRotationNumber > lastRotationNumber) {
       unsigned long expectedStartTime = runCommandTime + ((currentRotationNumber) * periodMs);
       
-      // Start if we've reached or passed the scheduled time
+      // Start if we've reached or p assed the scheduled time
       if (now >= expectedStartTime) {
         Serial.print("Starting periodic rotation #");
         Serial.println(currentRotationNumber + 1);
@@ -624,7 +546,8 @@ void updateMotorControl() {
   }
 }
 
-
+////////////////////////////////////////////////////////////////////////
+// WEB page stuff
 // Serve the main web page
 void handleRoot() {
   String html = R"rawliteral(
@@ -786,10 +709,6 @@ void handleRoot() {
     <div class="error" id="error"></div>
     
     <h2>Configuration</h2>
-    <div class="config-group">
-      <label for="homeOffset">HOME OFFSET (degrees 0-360):</label>
-      <input type="number" id="homeOffset" min="0" max="360" value="0">
-    </div>
     
     <div class="config-group">
       <label for="periodicPeriod">PERIODIC PERIOD (seconds, 60-1000):</label>
@@ -803,10 +722,6 @@ void handleRoot() {
         <option value="180">180</option>
         <option value="270">270</option>
         <option value="360">360</option>
-        <option value="450">450</option>
-        <option value="540">540</option>
-        <option value="630">630</option>
-        <option value="720">720</option>
       </select>
     </div>
     
@@ -827,12 +742,10 @@ void handleRoot() {
   
   <script>
     function sendCommand(command) {
-      const homeOffset = document.getElementById('homeOffset').value;
       const periodicPeriod = document.getElementById('periodicPeriod').value;
       const periodicRotation = document.getElementById('periodicRotation').value;
       
       const params = new URLSearchParams();
-      params.append('homeOffset', homeOffset);
       params.append('periodicPeriod', periodicPeriod);
       params.append('periodicRotation', periodicRotation);
       
@@ -873,14 +786,6 @@ void handleRoot() {
 
 // Handle configuration updates
 void handleConfig() {
-  if (server.hasArg("homeOffset")) {
-    int offset = server.arg("homeOffset").toInt();
-    if (offset < 0 || offset > 360) {
-      server.send(400, "text/plain", "ERROR: HOME OFFSET must be 0-360 degrees");
-      return;
-    }
-    homeOffset = offset;
-  }
   
   if (server.hasArg("periodicPeriod")) {
     float period = server.arg("periodicPeriod").toFloat();
@@ -893,7 +798,7 @@ void handleConfig() {
   
   if (server.hasArg("periodicRotation")) {
     int rotation = server.arg("periodicRotation").toInt();
-    int validRotations[] = {90, 180, 270, 360, 450, 540, 630, 720};
+    int validRotations[] = {90, 180, 270, 360};
     bool valid = false;
     for (int i = 0; i < 8; i++) {
       if (rotation == validRotations[i]) {
@@ -914,12 +819,6 @@ void handleConfig() {
 // Handle HOME command
 void handleHome() {
   // Update config from parameters
-  if (server.hasArg("homeOffset")) {
-    int offset = server.arg("homeOffset").toInt();
-    if (offset >= 0 && offset <= 360) {
-      homeOffset = offset;
-    }
-  }
   
   if (server.hasArg("periodicPeriod")) {
     float period = server.arg("periodicPeriod").toFloat();
@@ -930,7 +829,7 @@ void handleHome() {
   
   if (server.hasArg("periodicRotation")) {
     int rotation = server.arg("periodicRotation").toInt();
-    int validRotations[] = {90, 180, 270, 360, 450, 540, 630, 720};
+    int validRotations[] = {90, 180, 270, 360};
     for (int i = 0; i < 8; i++) {
       if (rotation == validRotations[i]) {
         periodicRotation = rotation;
@@ -947,6 +846,7 @@ void handleHome() {
   motorState = HOMING;
   homeCountDuringHome = 0;
   positionCountDuringRotation = 0;
+
   digitalWrite(MOTOR_PIN, HIGH);
   Serial.println("HOME command issued");
   
@@ -956,12 +856,6 @@ void handleHome() {
 // Handle RUN command
 void handleRun() {
   // Update config from parameters
-  if (server.hasArg("homeOffset")) {
-    int offset = server.arg("homeOffset").toInt();
-    if (offset >= 0 && offset <= 360) {
-      homeOffset = offset;
-    }
-  }
   
   if (server.hasArg("periodicPeriod")) {
     float period = server.arg("periodicPeriod").toFloat();
@@ -972,7 +866,7 @@ void handleRun() {
   
   if (server.hasArg("periodicRotation")) {
     int rotation = server.arg("periodicRotation").toInt();
-    int validRotations[] = {90, 180, 270, 360, 450, 540, 630, 720};
+    int validRotations[] = {90, 180, 270, 360};
     for (int i = 0; i < 8; i++) {
       if (rotation == validRotations[i]) {
         periodicRotation = rotation;
@@ -988,7 +882,6 @@ void handleRun() {
   
   motorState = PERIODIC_RUNNING;
   positionCountDuringRotation = 0;
-  runCommandTime = millis();
   lastRotationNumber = 0;
   digitalWrite(MOTOR_PIN, HIGH);
   Serial.println("RUN command issued");
