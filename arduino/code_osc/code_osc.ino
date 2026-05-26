@@ -242,7 +242,8 @@ public:
 };
 
 void printOSCMessage(OSCDecoder::OSCMessage* msg);
-void doOSCMessage(OSCDecoder::OSCMessage* msg);
+void decodeOSCMessage(OSCDecoder::OSCMessage* msg);
+void doOSC(void);
 
 void printOSCMessage(OSCDecoder::OSCMessage* msg) {
     Serial.print("Address: ");
@@ -283,9 +284,17 @@ void printOSCMessage(OSCDecoder::OSCMessage* msg) {
     Serial.println();
 }
 
+//Decoded OSC messages
+bool calibrateHome = false;
+bool motorOn = false;
+bool motorOff = false;
+bool rotateTo0 = false;
+bool rotateTo90 = false;
+bool rotateTo180 = false;
+bool rotateTo270 = false;
 
 // Control motor using info in the OSC message
-void doOSCMessage(OSCDecoder::OSCMessage* msg) {
+void decodeOSCMessage(OSCDecoder::OSCMessage* msg) {
     // Serial.print("Address: ");
     // Serial.println(msg->address);
     String osc = msg->address;
@@ -319,32 +328,38 @@ void doOSCMessage(OSCDecoder::OSCMessage* msg) {
         return;
     }
 
-    bool rotateHome = false;
-    bool motorOn = false;
-    bool motorOff = false;
+    calibrateHome = false;
+    motorOn = false;
+    motorOff = false;
     if(cnt == 2) {
-        rotateHome = oscField[1] == "home";
+        calibrateHome = oscField[1] == "home";
         motorOn = oscField[1] == "on";
         motorOff = oscField[1] == "off";
     }
 
-    bool rotateDirCw = false;
-    int rotateTo0 = false;
-    int rotateTo180 = false;
+    rotateTo0 = false;
+    rotateTo90 = false;
+    rotateTo180 = false;
+    rotateTo270 = false;
     if(cnt == 3) {
-        rotateDirCw = oscField[1] == "cw";
-        if(!rotateDirCw) return;
-        rotateTo0 = oscField[2] == "0";
-        rotateTo180 = oscField[2] == "180";
+        if(oscField[1] == "rotate") {
+          rotateTo0 = oscField[2] == "0";
+          rotateTo90 = oscField[2] == "90";
+          rotateTo180 = oscField[2] == "180";
+          rotateTo270 = oscField[2] == "270";
+        }
     }
+}
 
+// activate the OSC messages already decoded
+void doOSC(void) {
     if (motorOn) Serial.println("Turn motor ON");
     if (motorOff) Serial.println("Turn motor OFF");
-    if (rotateHome) Serial.println("Rotate to the HOME position");
-    if (rotateDirCw) {
-        if (rotateTo0) Serial.println("Rotate CW to the 0 position");
-        if (rotateTo180) Serial.println("Rotate CW to the 180 position");
-    }
+    if (calibrateHome) Serial.println("Calibrate to the HOME position");
+    if (rotateTo0) Serial.println("Rotate to the 0 position");
+    if (rotateTo90) Serial.println("Rotate to the 90 position");
+    if (rotateTo180) Serial.println("Rotate to the 180 position");
+    if (rotateTo270) Serial.println("Rotate to the 270 position");
 }
 
 // Handle OSC messages
@@ -389,7 +404,8 @@ void handleOSC(void) {
         OSCDecoder::OSCMessage* msg = OSCDecoder::decodeMessage(buffer, len);
         if (msg != nullptr) {
             printOSCMessage(msg);
-            doOSCMessage(msg);
+            decodeOSCMessage(msg);
+            doOSC();
             // // The web page does not seem to be found to load in a browser
             // // messageHistory.add(formatOSCMessageForWeb(msg));
             delete msg;
