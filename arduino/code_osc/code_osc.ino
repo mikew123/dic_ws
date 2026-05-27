@@ -41,7 +41,8 @@ enum MotorState {
   HOMING,
   HOME_COMPLETE,
   PERIODIC_RUNNING,
-  PERIODIC_WAITING
+  PERIODIC_WAITING,
+  OSC_ROTATE_NOW
 };
 
 // Configuration parameters
@@ -111,7 +112,7 @@ void loop() {
   server.handleClient();
   updateSwitchStates();
   updateMotorControl();
-  handleOSC();
+  checkOSC();
   
   // MRW: LED ON when motor is on
   if(digitalRead(MOTOR_PIN)) 
@@ -344,22 +345,32 @@ void decodeOSCMessage(OSCDecoder::OSCMessage* msg) {
 
 // activate the OSC messages already decoded
 void doOSC(void) {
-    if (motorOn) Serial.println("Turn motor ON");
-    if (motorOff) Serial.println("Turn motor OFF");
-    if (calibrateHome) Serial.println("Calibrate to the HOME position");
-    if (rotateTo0) Serial.println("Rotate to the 0 position");
-    if (rotateTo90) Serial.println("Rotate to the 90 position");
-    if (rotateTo180) Serial.println("Rotate to the 180 position");
-    if (rotateTo270) Serial.println("Rotate to the 270 position");
+    // if (motorOn) Serial.println("Turn motor ON");
+
+    if (motorOff) {
+      digitalWrite(MOTOR_PIN, LOW);
+      motorState = MOTOR_OFF;
+      Serial.println("OSC Turn motor OFF");
+    }
+
+    // if (calibrateHome) Serial.println("Calibrate to the HOME position");
+
+    // if (rotateTo0) Serial.println("Rotate to the 0 position");
+    // if (rotateTo90) Serial.println("Rotate to the 90 position");
+    // if (rotateTo180) Serial.println("Rotate to the 180 position");
+    // if (rotateTo270) Serial.println("Rotate to the 270 position");
 
     if (rotateNow) {
       // start new rotation using periodic rotation degrees on web page
-
+      digitalWrite(MOTOR_PIN, HIGH);
+      motorState = OSC_ROTATE_NOW;
+      positionCountDuringRotation = 0;
+      Serial.println("OSC Rotate now for the rotation degrees set on the web page");
     }
 }
 
 // Handle OSC messages
-void handleOSC(void) {
+void checkOSC(void) {
     // // Check WiFi connection status and reconnect if needed
     // if (WiFi.status() != WL_CONNECTED) {
     //     Serial.println("WiFi disconnected! Attempting to reconnect...");
@@ -494,6 +505,22 @@ void onPositionSwitchTriggered(unsigned long now) {
       Serial.print("Periodic rotation complete, next in ");
       Serial.print(periodicPeriod);
       Serial.println(" seconds");
+    }
+  } else if (motorState == OSC_ROTATE_NOW ) {
+    // Count position switches during periodic rotation
+    positionCountDuringRotation++;
+    Serial.print("Position switch count during rotation: ");
+    Serial.println(positionCountDuringRotation);
+    
+    // Check if we've reached the target rotation
+    int targetPositionSwitches = periodicRotation / 90;
+    if (positionCountDuringRotation >= targetPositionSwitches) {
+      // Stop motor for next scheduled rotation
+      digitalWrite(MOTOR_PIN, LOW);
+      motorState = MOTOR_OFF;
+      
+      Serial.println("OSC rotation complete");
+      positionCountDuringRotation = 0;
     }
   }
 }
