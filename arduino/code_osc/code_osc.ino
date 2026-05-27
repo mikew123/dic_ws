@@ -42,7 +42,12 @@ enum MotorState {
   HOME_COMPLETE,
   PERIODIC_RUNNING,
   PERIODIC_WAITING,
-  OSC_ROTATE_NOW
+  OSC_ROTATE_NOW,
+  OSC_ROTATE_0,
+  OSC_ROTATE_90,
+  OSC_ROTATE_180,
+  OSC_ROTATE_270,
+  OSC_ROTATE_360,
 };
 
 // Configuration parameters
@@ -355,17 +360,32 @@ void doOSC(void) {
 
     // if (calibrateHome) Serial.println("Calibrate to the HOME position");
 
-    // if (rotateTo0) Serial.println("Rotate to the 0 position");
-    // if (rotateTo90) Serial.println("Rotate to the 90 position");
-    // if (rotateTo180) Serial.println("Rotate to the 180 position");
-    // if (rotateTo270) Serial.println("Rotate to the 270 position");
+    if (rotateTo0) {
+      Serial.println("Rotate to the 0 (HOME) position");
+      digitalWrite(MOTOR_PIN, HIGH);
+      motorState = OSC_ROTATE_0;
+    }
+    if (rotateTo90) {
+      Serial.println("Rotate to the 90 position");
+      digitalWrite(MOTOR_PIN, HIGH);
+      motorState = OSC_ROTATE_90;
+    }
+    if (rotateTo180) {
+      Serial.println("Rotate to the 180 position");
+      digitalWrite(MOTOR_PIN, HIGH);
+      motorState = OSC_ROTATE_180;
+    }
+    if (rotateTo270) {
+      Serial.println("Rotate to the 270 position");
+      digitalWrite(MOTOR_PIN, HIGH);
+      motorState = OSC_ROTATE_270;
+    }
 
     if (rotateNow) {
-      // start new rotation using periodic rotation degrees on web page
+      Serial.println("OSC Rotate now for the rotation degrees set on the web page");
       digitalWrite(MOTOR_PIN, HIGH);
       motorState = OSC_ROTATE_NOW;
       positionCountDuringRotation = 0;
-      Serial.println("OSC Rotate now for the rotation degrees set on the web page");
     }
 }
 
@@ -484,6 +504,11 @@ void onHomeSwitchTriggered(unsigned long now) {
     if (homeCountDuringHome == 1) {
       positionCountDuringRotation = -1; 
     }
+  } else if (motorState == OSC_ROTATE_0) {
+      digitalWrite(MOTOR_PIN, LOW);
+      motorState = MOTOR_OFF;
+      Serial.println("OSC rotation to 0 (home) complete");
+      positionCountDuringRotation = 0;
   }
 }
 
@@ -506,7 +531,7 @@ void onPositionSwitchTriggered(unsigned long now) {
       Serial.print(periodicPeriod);
       Serial.println(" seconds");
     }
-  } else if (motorState == OSC_ROTATE_NOW ) {
+  } else if (motorState == OSC_ROTATE_NOW) {
     // Count position switches during periodic rotation
     positionCountDuringRotation++;
     Serial.print("Position switch count during rotation: ");
@@ -518,10 +543,31 @@ void onPositionSwitchTriggered(unsigned long now) {
       // Stop motor for next scheduled rotation
       digitalWrite(MOTOR_PIN, LOW);
       motorState = MOTOR_OFF;
-      
       Serial.println("OSC rotation complete");
       positionCountDuringRotation = 0;
     }
+  } else if (    (motorState == OSC_ROTATE_90) 
+              || (motorState == OSC_ROTATE_180)
+              || (motorState == OSC_ROTATE_270) {
+    int deg = 0;
+    if(motorState == OSC_ROTATE_90) deg = 90;
+    else if(motorState == OSC_ROTATE_180) deg = 180;
+    else if(motorState == OSC_ROTATE_270) deg = 270;
+
+    // Count position switches during periodic rotation
+    positionCountDuringRotation++;
+    Serial.print("Position switch count during rotation: ");
+    Serial.println(positionCountDuringRotation);
+    
+    // Check if we've reached the target rotation
+    int targetPositionSwitches = deg / 90;
+    if (positionCountDuringRotation >= targetPositionSwitches) {
+      // Stop motor for next scheduled rotation
+      digitalWrite(MOTOR_PIN, LOW);
+      motorState = MOTOR_OFF;
+      Serial.println("OSC rotation 180 complete");
+    }
+
   }
 }
 
