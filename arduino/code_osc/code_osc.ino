@@ -10,9 +10,22 @@
 #include <FreeRTOS.h>
 #include "ledStuff.h"
 
-// WiFi credentials
-const char* ssid = "dicotomy";
-const char* password = "passion";
+// WiFi credentials for AP mode (fallback)
+const char* apSSID = "dicotomy";
+const char* apPassword = "passion";
+
+// WiFi connection mode and status
+Preferences preferences;
+enum ConnectionMode {
+  CONN_MODE_AP,      // Access Point (fallback)
+  CONN_MODE_STA,     // Station (connected to external WiFi)
+  CONN_MODE_ATTEMPTING // Attempting to connect to external WiFi
+};
+ConnectionMode currentWiFiMode = CONN_MODE_AP;
+String staSSID = "";
+String staPassword = "";
+unsigned long wifiConnectStartTime = 0;
+const unsigned long WIFI_CONNECT_TIMEOUT = 15000; // 15 seconds to connect
 
 // Constants
 const uint16_t WEB_SERVER_PORT = 80;
@@ -89,14 +102,19 @@ void setup() {
   pinMode(HOME_SWITCH_PIN, INPUT_PULLUP);
   pinMode(POSITION_SWITCH_PIN, INPUT_PULLUP);
   
-  // Start WiFi in AP mode
-  Serial.println("\nStarting WiFi AP Mode...");
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(ssid, password);
+  // Initialize preferences
+  preferences.begin("wifi-config", false);
   
-  IPAddress IP = WiFi.softAPIP();
-  Serial.print("AP IP address: ");
-  Serial.println(IP);
+  // Try to load and connect to saved WiFi in STA mode
+  loadWiFiCredentials();
+  if (staSSID.length() > 0) {
+    Serial.println("\nAttempting to connect to saved WiFi...");
+    connectToExternalWiFi();
+  } else {
+    // No saved WiFi, start in AP mode immediately
+    Serial.println("\nNo saved WiFi credentials. Starting in AP mode...");
+    startAPMode();
+  }
   
   // Setup web server routes
   server.on("/", handleRoot);
@@ -107,6 +125,9 @@ void setup() {
   server.on("/run", handleRun);
   server.on("/stop", handleStop);
   server.on("/status", handleStatus);
+  server.on("/scan", handleScanWiFi);
+  server.on("/wifi", handleWiFiConfig);
+  server.on("/wifiStatus", handleWiFiStatus);
   server.onNotFound(handleNotFound);
   
   server.begin();
@@ -117,6 +138,7 @@ void loop() {
   server.handleClient();
   updateSwitchStates();
   updateMotorControl();
+  checkWiFiConnection();
   checkOSC();
   
   // MRW: LED ON when motor is on
@@ -127,6 +149,86 @@ void loop() {
 
 }
 
+
+////////////////////////////////////////////////////////////////////////
+// WiFi Management Functions
+
+// Load WiFi credentials from preferences/EEPROM
+void loadWiFiCredentials() {
+  preferences.begin("wifi-config", true);  // true = read-only mode first
+  staSSID = preferences.getString("ssid", "");
+  staPassword = preferences.getString("password", "");
+  preferences.end();
+  
+  if (staSSID.length() > 0) {
+    Serial.print("Loaded WiFi SSID from EEPROM: ");
+    Serial.println(staSSID);
+  }
+}
+
+// Save WiFi credentials to preferences/EEPROM
+void saveWiFiCredentials(String ssid, String password) {
+  preferences.begin("wifi-config", false);  // false = read-write mode
+  preferences.putString("ssid", ssid);
+  preferences.putString("password", password);
+  preferences.end();
+  Serial.print("Saved WiFi credentials to EEPROM: ");
+  Serial.println(ssid);
+}
+
+// Start AP mode (Access Point)
+void startAPMode() {
+  Serial.println("Starting WiFi AP Mode...");
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(apSSID, apPassword);
+  
+  IPAddress IP = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.println(IP);
+  currentWiFiMode = CONN_MODE_AP;
+  udpStarted = false;  // Reset UDP listener
+}
+
+// Connect to external WiFi (STA mode)
+void connectToExternalWiFi() {
+  if (staSSID.length() == 0) {
+    Serial.println("ERROR: No WiFi SSID to connect to");
+    return;
+  }
+  
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(staSSID);
+  
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(staSSID.c_str(), staPassword.c_str());
+  
+  currentWiFiMode = CONN_MODE_ATTEMPTING;
+  wifiConnectStartTime = millis();
+}
+
+// Check WiFi connection status and handle transitions
+void checkWiFiConnection() {
+  if (currentWiFiMode == CONN_MODE_ATTEMPTING) {
+    unsigned long elapsed = millis() - wifiConnectStartTime;
+    
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\nWiFi connected!");
+      Serial.print("IP address: ");
+      Serial.println(WiFi.localIP());
+      currentWiFiMode = CONN_MODE_STA;
+      udpStarted = false;  // Reset UDP listener to start on new network
+    } else if (elapsed > WIFI_CONNECT_TIMEOUT) {
+      Serial.println("WiFi connection timeout. Switching to AP mode...");
+      startAPMode();
+    }
+  } else if (currentWiFiMode == CONN_MODE_STA) {
+    // Monitor STA connection
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("WiFi connection lost. Switching to AP mode...");
+      startAPMode();
+    }
+  }
+}
 
 ////////////////////////////////////////////////////////////////////////
 // OSC STUFF
@@ -548,7 +650,7 @@ void onPositionSwitchTriggered(unsigned long now) {
     }
   } else if (    (motorState == OSC_ROTATE_90) 
               || (motorState == OSC_ROTATE_180)
-              || (motorState == OSC_ROTATE_270) {
+              || (motorState == OSC_ROTATE_270) ) {
     int deg = 0;
     if(motorState == OSC_ROTATE_90) deg = 90;
     else if(motorState == OSC_ROTATE_180) deg = 180;
@@ -781,7 +883,31 @@ void handleRoot() {
     
     <div class="error" id="error"></div>
     
-    <h2>Configuration</h2>
+    <h2>WiFi Configuration</h2>
+    <div class="config-group">
+      <label>WiFi Mode: <span id="wifiMode">Unknown</span></label>
+    </div>
+    
+    <div class="config-group">
+      <label for="wifiNetwork">Connect to External WiFi:</label>
+      <select id="wifiNetwork">
+        <option value="">-- Select a network --</option>
+      </select>
+      <button style="width: 100%; margin-top: 10px; padding: 10px; background-color: #2196F3; color: white; border: none; border-radius: 5px; cursor: pointer;" onclick="scanWiFiNetworks()">Scan Networks</button>
+    </div>
+    
+    <div class="config-group">
+      <label for="wifiPassword">WiFi Password:</label>
+      <input type="text" id="wifiPassword" placeholder="Enter WiFi password">
+      <div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
+        <input type="checkbox" id="showPassword" checked onchange="togglePasswordVisibility()">
+        <label for="showPassword" style="margin: 0; cursor: pointer;">Show password</label>
+      </div>
+    </div>
+    
+    <button style="width: 100%; padding: 10px; background-color: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; margin-bottom: 20px;" onclick="saveWiFiCredentials()">Save WiFi Credentials</button>
+    
+    <h2>Motor Configuration</h2>
     
     <div class="config-group">
       <label for="periodicPeriod">PERIODIC PERIOD (seconds, 60-1000):</label>
@@ -814,6 +940,58 @@ void handleRoot() {
   </div>
   
   <script>
+    function scanWiFiNetworks() {
+      const selector = document.getElementById('wifiNetwork');
+      selector.innerHTML = '<option value="">Scanning...</option>';
+      
+      fetch('/scan')
+        .then(response => response.json())
+        .then(networks => {
+          selector.innerHTML = '<option value="">-- Select a network --</option>';
+          networks.forEach(network => {
+            const option = document.createElement('option');
+            option.value = network.ssid;
+            option.textContent = network.ssid + " (" + network.rssi + " dBm)";
+            selector.appendChild(option);
+          });
+        })
+        .catch(error => {
+          console.error('Error scanning networks:', error);
+          selector.innerHTML = '<option value="">-- Error scanning --</option>';
+        });
+    }
+    
+    function saveWiFiCredentials() {
+      const ssid = document.getElementById('wifiNetwork').value;
+      const password = document.getElementById('wifiPassword').value;
+      
+      if (!ssid) {
+        alert('Please select a WiFi network');
+        return;
+      }
+      
+      const params = new URLSearchParams();
+      params.append('ssid', ssid);
+      params.append('password', password);
+      
+      fetch('/wifi?' + params.toString())
+        .then(response => response.text())
+        .then(data => {
+          alert('WiFi credentials saved. Attempting to connect...');
+          document.getElementById('wifiPassword').value = '';
+        })
+        .catch(error => {
+          console.error('Error saving WiFi:', error);
+          alert('Error saving WiFi credentials');
+        });
+    }
+    
+    function togglePasswordVisibility() {
+      const passwordField = document.getElementById('wifiPassword');
+      const showPassword = document.getElementById('showPassword').checked;
+      passwordField.type = showPassword ? 'text' : 'password';
+    }
+    
     function sendCommand(command) {
       const periodicPeriod = document.getElementById('periodicPeriod').value;
       const periodicRotation = document.getElementById('periodicRotation').value;
@@ -840,6 +1018,16 @@ void handleRoot() {
         });
     }
     
+    // Update WiFi mode display
+    function updateWiFiStatus() {
+      fetch('/wifiStatus')
+        .then(response => response.text())
+        .then(data => {
+          document.getElementById('wifiMode').textContent = data;
+        })
+        .catch(error => console.error('Error:', error));
+    }
+    
     // Refresh status periodically
     setInterval(() => {
       fetch('/status')
@@ -848,7 +1036,12 @@ void handleRoot() {
           document.getElementById('status').textContent = data;
         })
         .catch(error => console.error('Error:', error));
+      
+      updateWiFiStatus();
     }, 1000);
+    
+    // Initial status update
+    updateWiFiStatus();
   </script>
 </body>
 </html>
@@ -1022,4 +1215,67 @@ void handleStatus() {
 // Handle undefined routes
 void handleNotFound() {
   server.send(404, "text/plain", "Not Found");
+}
+
+////////////////////////////////////////////////////////////////////////
+// WiFi Configuration Web Handlers
+
+// Scan for available WiFi networks
+void handleScanWiFi() {
+  Serial.println("Scanning for WiFi networks...");
+  
+  // Perform WiFi scan
+  int numNetworks = WiFi.scanNetworks();
+  
+  String response = "[";
+  for (int i = 0; i < numNetworks; i++) {
+    if (i > 0) response += ",";
+    response += "{";
+    response += "\"ssid\":\"" + String(WiFi.SSID(i)) + "\"";
+    response += ",\"rssi\":" + String(WiFi.RSSI(i));
+    response += "}";
+  }
+  response += "]";
+  
+  server.send(200, "application/json", response);
+}
+
+// Handle WiFi configuration
+void handleWiFiConfig() {
+  if (server.hasArg("ssid")) {
+    String ssid = server.arg("ssid");
+    String password = server.arg("password");
+    
+    if (ssid.length() == 0) {
+      server.send(400, "text/plain", "ERROR: SSID cannot be empty");
+      return;
+    }
+    
+    // Save credentials to EEPROM
+    staSSID = ssid;
+    staPassword = password;
+    saveWiFiCredentials(staSSID, staPassword);
+    
+    // Attempt to connect
+    connectToExternalWiFi();
+    
+    server.send(200, "text/plain", "WiFi configuration saved and connection attempted");
+  } else {
+    server.send(400, "text/plain", "ERROR: Missing SSID parameter");
+  }
+}
+
+// Handle WiFi status request
+void handleWiFiStatus() {
+  String status = "Unknown";
+  
+  if (currentWiFiMode == CONN_MODE_AP) {
+    status = "AP Mode (Fallback)";
+  } else if (currentWiFiMode == CONN_MODE_STA) {
+    status = "Connected to: " + String(WiFi.SSID());
+  } else if (currentWiFiMode == CONN_MODE_ATTEMPTING) {
+    status = "Connecting...";
+  }
+  
+  server.send(200, "text/plain", status);
 }
