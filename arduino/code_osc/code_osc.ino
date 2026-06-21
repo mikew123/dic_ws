@@ -55,12 +55,16 @@ enum MotorState {
   HOME_COMPLETE,
   PERIODIC_RUNNING,
   PERIODIC_WAITING,
+  OSC_MOTOR_ON,
+  OSC_MOTOR_OFF,
   OSC_ROTATE_NOW,
-  OSC_ROTATE_0,
+  OSC_ROTATE_TO_0,
+  OSC_ROTATE_TO_90,
+  OSC_ROTATE_TO_180,
+  OSC_ROTATE_TO_270,
   OSC_ROTATE_90,
   OSC_ROTATE_180,
-  OSC_ROTATE_270,
-  OSC_ROTATE_360,
+  OSC_ROTATE_360
 };
 
 // Configuration parameters
@@ -241,6 +245,8 @@ bool rotateTo0 = false;
 bool rotateTo90 = false;
 bool rotateTo180 = false;
 bool rotateTo270 = false;
+bool rotate90 = false;
+bool rotate180 = false;
 bool rotateNow = false;
 
 class OSCDecoder {
@@ -389,6 +395,9 @@ void printOSCMessage(OSCDecoder::OSCMessage* msg) {
     Serial.println();
 }
 
+// Current value of home switch
+bool homeRaw = false;
+
 
 // Control motor using info in the OSC message
 void decodeOSCMessage(OSCDecoder::OSCMessage* msg) {
@@ -439,48 +448,81 @@ void decodeOSCMessage(OSCDecoder::OSCMessage* msg) {
     rotateTo180 = false;
     rotateTo270 = false;
     rotateNow = false;
+    rotate90 = false;
+    calibrateHome = false;
+    rotate180 = false;
     if(cnt == 3) {
-        if(oscField[1] == "rotate") {
-          rotateTo0 = oscField[2] == "0";
-          rotateTo90 = oscField[2] == "90";
+        if(oscField[1] == "rotate_to") {
+          rotateTo0   = oscField[2] == "0";
+          rotateTo90  = oscField[2] == "90";
           rotateTo180 = oscField[2] == "180";
           rotateTo270 = oscField[2] == "270";
-          rotateNow = oscField[2] == "now";
+          rotateNow   = oscField[2] == "now";
+        }
+        if(oscField[1] == "rotate") {
+          rotate90  = oscField[2] == "90";
+          rotate180 = oscField[2] == "90";
         }
     }
 }
 
 // activate the OSC messages already decoded
 void doOSC(void) {
-    // if (motorOn) Serial.println("Turn motor ON");
 
+    if (motorOn) {
+      digitalWrite(MOTOR_PIN, HIGH);
+      motorState = MOTOR_ON;
+      Serial.println("OSC Turn motor ON");
+    }
     if (motorOff) {
       digitalWrite(MOTOR_PIN, LOW);
       motorState = MOTOR_OFF;
       Serial.println("OSC Turn motor OFF");
     }
 
-    // if (calibrateHome) Serial.println("Calibrate to the HOME position");
-
     if (rotateTo0) {
       Serial.println("Rotate to the 0 (HOME) position");
-      digitalWrite(MOTOR_PIN, HIGH);
-      motorState = OSC_ROTATE_0;
+      // check if already at home position
+      if (homeRaw == false) {
+        digitalWrite(MOTOR_PIN, HIGH);
+        motorState = OSC_ROTATE_TO_0;
+      } 
+      else {
+        digitalWrite(MOTOR_PIN, LOW);
+        motorState = MOTOR_OFF;
+        Serial.println("OSC rotation to 0 (home) complete");
+        positionCountDuringRotation = 0;
+      }
     }
     if (rotateTo90) {
       Serial.println("Rotate to the 90 position");
       digitalWrite(MOTOR_PIN, HIGH);
-      motorState = OSC_ROTATE_90;
+      motorState = OSC_ROTATE_TO_90;
     }
     if (rotateTo180) {
       Serial.println("Rotate to the 180 position");
       digitalWrite(MOTOR_PIN, HIGH);
-      motorState = OSC_ROTATE_180;
+      motorState = OSC_ROTATE_TO_180;
     }
     if (rotateTo270) {
       Serial.println("Rotate to the 270 position");
       digitalWrite(MOTOR_PIN, HIGH);
-      motorState = OSC_ROTATE_270;
+      motorState = OSC_ROTATE_TO_270;
+    }
+    if (rotate90) {
+      Serial.println("Rotate 90 Deg");
+      digitalWrite(MOTOR_PIN, HIGH);
+      motorState = OSC_ROTATE_90;
+    }
+    if (rotate180) {
+      Serial.println("Rotate 180 Deg");
+      digitalWrite(MOTOR_PIN, HIGH);
+      motorState = OSC_ROTATE_180;
+    }
+    if (rotate180) {
+      Serial.println("Rotate 360 Deg");
+      digitalWrite(MOTOR_PIN, HIGH);
+      motorState = OSC_ROTATE_360;
     }
 
     if (rotateNow) {
@@ -557,7 +599,7 @@ void updateSwitchStates() {
   unsigned long now = millis();
   
   // Read HOME switch
-  bool homeRaw = digitalRead(HOME_SWITCH_PIN);
+  homeRaw = digitalRead(HOME_SWITCH_PIN);
   if (homeRaw != homeSwitchLastState) {
     homeDetectTime = now;
     homeSwitchLastState = homeRaw;
@@ -606,7 +648,7 @@ void onHomeSwitchTriggered(unsigned long now) {
     if (homeCountDuringHome == 1) {
       positionCountDuringRotation = -1; 
     }
-  } else if (motorState == OSC_ROTATE_0) {
+  } else if (motorState == OSC_ROTATE_TO_0) {
       digitalWrite(MOTOR_PIN, LOW);
       motorState = MOTOR_OFF;
       Serial.println("OSC rotation to 0 (home) complete");
@@ -648,13 +690,13 @@ void onPositionSwitchTriggered(unsigned long now) {
       Serial.println("OSC rotation complete");
       positionCountDuringRotation = 0;
     }
-  } else if (    (motorState == OSC_ROTATE_90) 
-              || (motorState == OSC_ROTATE_180)
-              || (motorState == OSC_ROTATE_270) ) {
+  } else if (    (motorState == OSC_ROTATE_TO_90) 
+              || (motorState == OSC_ROTATE_TO_180)
+              || (motorState == OSC_ROTATE_TO_270) ) {
     int deg = 0;
-    if(motorState == OSC_ROTATE_90) deg = 90;
-    else if(motorState == OSC_ROTATE_180) deg = 180;
-    else if(motorState == OSC_ROTATE_270) deg = 270;
+    if(motorState == OSC_ROTATE_TO_90) deg = 90;
+    else if(motorState == OSC_ROTATE_TO_180) deg = 180;
+    else if(motorState == OSC_ROTATE_TO_270) deg = 270;
 
     // Count position switches during periodic rotation
     positionCountDuringRotation++;
